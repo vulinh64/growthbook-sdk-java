@@ -44,7 +44,9 @@ class GBContextTest {
 
         GBContext subject = new GBContext(
                 sampleUserAttributes,
+                null,
                 featuresJson,
+                null,
                 null,
                 isEnabled,
                 isQaMode,
@@ -52,6 +54,7 @@ class GBContextTest {
                 allowUrlOverride,
                 forcedVariations,
                 trackingCallback,
+                null,
                 null,
                 null,
                 null,
@@ -124,7 +127,9 @@ class GBContextTest {
 
         GBContext subject = new GBContext(
                 sampleUserAttributes,
+                null,
                 encryptedFeaturesJson,
+                null,
                 encryptionKey,
                 isEnabled,
                 isQaMode,
@@ -135,12 +140,13 @@ class GBContextTest {
                 null,
                 null,
                 null,
+                null,
                 null
         );
         String expectedFeaturesJson = "{\"greeting\":{\"defaultValue\":\"hello\",\"rules\":[{\"condition\":{\"country\":\"france\"},\"force\":\"bonjour\"},{\"condition\":{\"country\":\"mexico\"},\"force\":\"hola\"}]}}";
 
         assertNotNull(subject);
-        assertEquals(expectedFeaturesJson.trim(), subject.getFeaturesJson().trim());
+        assertEquals(expectedFeaturesJson.trim(), subject.getFeatures().toString().trim());
     }
 
     @Test
@@ -171,8 +177,8 @@ class GBContextTest {
         String expectedFeaturesJson = "{\"greeting\":{\"defaultValue\":\"hello\",\"rules\":[{\"condition\":{\"country\":\"france\"},\"force\":\"bonjour\"},{\"condition\":{\"country\":\"mexico\"},\"force\":\"hola\"}]}}";
 
         assertNotNull(subject);
-        assert subject.getFeaturesJson() != null;
-        assertEquals(expectedFeaturesJson.trim(), subject.getFeaturesJson().trim());
+        assert subject.getFeatures() != null;
+        assertEquals(expectedFeaturesJson.trim(), subject.getFeatures().toString().trim());
     }
 
     @Test
@@ -187,7 +193,7 @@ class GBContextTest {
                 .encryptionKey(encryptionKey)
                 .build();
 
-        assertEquals("{}", subject.getFeaturesJson());
+        assertEquals("{}", subject.getFeatures().toString());
     }
 
     @Test
@@ -202,6 +208,6 @@ class GBContextTest {
                 .encryptionKey(encryptionKey)
                 .build();
 
-        assertEquals("{}", subject.getFeaturesJson());
+        assertEquals("{}", subject.getFeatures().toString());
     }
 }

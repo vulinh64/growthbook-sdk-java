@@ -16,6 +16,7 @@ import static org.mockito.Mockito.verify;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import com.google.gson.annotations.SerializedName;
 import com.google.gson.reflect.TypeToken;
 import growthbook.sdk.java.testhelpers.PaperCupsConfig;
@@ -54,6 +55,9 @@ class GrowthBookTest {
             Type forcedVariationsType = new TypeToken<HashMap<String, Integer>>() {}.getType();
             HashMap<String, Integer> forcedVariations = jsonUtils.gson.fromJson(testCase.get(1).getAsJsonObject().get("forcedVariations"), forcedVariationsType);
 
+            JsonElement savedGroupsJson = testCase.get(1).getAsJsonObject().get("savedGroups");
+            JsonObject savedGroups = savedGroupsJson == null ? null : (JsonObject) savedGroupsJson;
+
 //            System.out.println("\n\n--------------------------");
 //            System.out.printf("evalFeature test: %s (index = %s)", testDescription, i);
 //            System.out.printf("\n features: %s", featuresJson);
@@ -64,6 +68,7 @@ class GrowthBookTest {
                     .featuresJson(featureJsonAsStringOrNull)
                     .attributesJson(attributesJsonAsStringOrNull)
                     .forcedVariationsMap(forcedVariations)
+                    .savedGroups(savedGroups)
                     .build();
 
 //            System.out.printf("\n context: %s", context);
@@ -227,6 +232,9 @@ class GrowthBookTest {
                 Type forcedVariationsType = new TypeToken<HashMap<String, Integer>>() {}.getType();
                 HashMap<String, Integer> forcedVariations = jsonUtils.gson.fromJson(itemArray.get(1).getAsJsonObject().get("forcedVariations"), forcedVariationsType);
 
+                JsonElement savedGroups = itemArray.get(1).getAsJsonObject().get("savedGroups");
+                JsonObject savedGroupToPass = savedGroups == null ? null : savedGroups.getAsJsonObject();
+
 
                 TestContext testContext = jsonUtils.gson.fromJson(itemArray.get(1).getAsJsonObject(), TestContext.class);
                 GBContext context = GBContext
@@ -237,6 +245,7 @@ class GrowthBookTest {
                         .isQaMode(testContext.qaMode)
                         .enabled(testContext.enabled)
                         .url(testContext.url)
+                        .savedGroups(savedGroupToPass)
                         .build();
 
                 Experiment experiment = jsonUtils.gson.fromJson(itemArray.get(2).getAsJsonObject(), Experiment.class);
@@ -246,7 +255,7 @@ class GrowthBookTest {
                 if (experimentElement != null) {
 //                System.out.printf("\n\n HERE: Experiment %s (index = %s)", experiment, i);
                     JsonObject experimentObject = jsonUtils.gson.fromJson(experimentElement.getAsJsonObject(), JsonObject.class);
-                    JsonElement conditionElement = experimentObject.get("condition");
+                    JsonObject conditionElement = experimentObject.getAsJsonObject("condition");
                     if (conditionElement != null) {
                         experiment.setConditionJson(conditionElement);
                     }
@@ -323,6 +332,25 @@ class GrowthBookTest {
 
         assertFalse(subject.isOn(featureKey));
         assertTrue(subject.isOff(featureKey));
+    }
+    
+    @Test
+    void test_isOn_should_be_stable() {
+        String featureKey = "flag";
+        
+        JsonObject jsonObject1 = new JsonObject();
+        JsonObject jsonObject2 = new JsonObject();
+        jsonObject2.add("defaultValue", new JsonPrimitive(true));
+        jsonObject1.add(featureKey, jsonObject2);
+        
+        GBContext context = GBContext
+        .builder()
+        .features(jsonObject1)
+        .build();
+        
+        GrowthBook subject = new GrowthBook(context);
+        assertTrue(subject.isOn(featureKey));
+        assertTrue(subject.isOn(featureKey));
     }
 
     @Test
@@ -504,14 +532,27 @@ class GrowthBookTest {
         FeatureEvaluator mockFeatureEvaluator = mock(FeatureEvaluator.class);
         GBContext context = GBContext.builder().build();
 
-        String attrJson = "{ id: 1 }";
-        String conditionJson = "{}";
+        String attrJsonStr = "{ id: 1 }";
+        String conditionJsonStr = "{}";
+        JsonObject attributesJson = GrowthBookJsonUtils.getInstance().gson.fromJson(attrJsonStr, JsonObject.class);
+        JsonObject conditionJson = GrowthBookJsonUtils.getInstance().gson.fromJson(conditionJsonStr, JsonObject.class);
+
+
 
         GrowthBook subject = new GrowthBook(context, mockFeatureEvaluator, mockConditionEvaluator, mockExperimentEvaluator);
 
-        subject.evaluateCondition(attrJson, conditionJson);
+        subject.evaluateCondition(attrJsonStr, conditionJsonStr);
 
-        verify(mockConditionEvaluator).evaluateCondition(attrJson, conditionJson);
+        verify(mockConditionEvaluator).evaluateCondition(attributesJson, conditionJson, new JsonObject());
+    }
+
+    @Test
+    void test_evaluateCondition_returnsFalseIfWrongShape() {
+        String attributes = "{\"name\": \"world\"}";
+        String condition = "[\"$not\": { \"name\": \"hello\" }]";
+
+        GrowthBook growthBook = new GrowthBook();
+        assertFalse(growthBook.evaluateCondition(attributes, condition));
     }
 
     @Test

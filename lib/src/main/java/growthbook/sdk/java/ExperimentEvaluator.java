@@ -5,18 +5,27 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * <b>INTERNAL</b>: Implementation of experiment evaluation
  */
+@Slf4j
 class ExperimentEvaluator implements IExperimentEvaluator {
 
     private final ConditionEvaluator conditionEvaluator = new ConditionEvaluator();
     private final GrowthBookJsonUtils jsonUtils = GrowthBookJsonUtils.getInstance();
 
-
+    /**
+     * Takes Context & Experiment & returns Experiment Result
+     *
+     * @param experiment         Experiment
+     * @param context            GBContext
+     * @param featureId          String(can be null)
+     * @param attributeOverrides JsonObject
+     * @return ExperimentResult
+     */
     @Override
     public <ValueType> ExperimentResult<ValueType> evaluateExperiment(Experiment<ValueType> experiment,
                                                                       GBContext context,
@@ -111,6 +120,7 @@ class ExperimentEvaluator implements IExperimentEvaluator {
         if (!foundStickyBucket) {
 
             List<Filter> filters = experiment.getFilters();
+            @Deprecated
             Namespace namespace = experiment.getNamespace();
 
             if (filters != null) {
@@ -130,10 +140,10 @@ class ExperimentEvaluator implements IExperimentEvaluator {
             }
 
             // Evaluate the condition JSON
-            JsonElement jsonStringCondition = experiment.getConditionJson();
-            if (jsonStringCondition != null) {
-                String attributesJson = jsonUtils.gson.toJson(attributes);
-                Boolean shouldEvaluate = conditionEvaluator.evaluateCondition(attributesJson, jsonStringCondition.toString());
+            // can it be instead JsonObject
+            JsonObject conditionJson = experiment.getConditionJson();
+            if (conditionJson != null) {
+                Boolean shouldEvaluate = conditionEvaluator.evaluateCondition(attributes, conditionJson, context.getSavedGroups());
 
                 // If experiment.condition is set and the condition evaluates to false,
                 // return immediately (not in experiment, variationId 0)
@@ -156,24 +166,27 @@ class ExperimentEvaluator implements IExperimentEvaluator {
                             )
                     );
 
-                    if (parentResult.source.equals(FeatureResultSource.CYCLIC_PREREQUISITE)) {
-                        return getExperimentResult(context, experiment, -1, false, featureId, null, null, attributeOverrides);
+                    if (parentResult.getSource() != null) {
+                        if (parentResult.getSource().equals(FeatureResultSource.CYCLIC_PREREQUISITE)) {
+                            return getExperimentResult(context, experiment, -1, false, featureId, null, null, attributeOverrides);
+                        }
                     }
 
                     Map<String, Object> evalObj = new HashMap<>();
                     if (parentResult.getValue() != null) {
                         evalObj.put("value", parentResult.getValue());
                     }
-                    String attributesJson = GrowthBookJsonUtils.getInstance().gson.toJson(evalObj);
+                    JsonObject attributesJson = GrowthBookJsonUtils.getInstance().gson.toJsonTree(evalObj).getAsJsonObject();
 
                     boolean evalCondition = conditionEvaluator.evaluateCondition(
                             attributesJson,
-                            parentCondition.getCondition().toString()
+                            parentCondition.getCondition(),
+                            context.getSavedGroups()
                     );
 
                     // blocking prerequisite eval failed: feature evaluation fails
                     if (!evalCondition) {
-                        System.out.println("Feature blocked by prerequisite");
+                        log.info("Feature blocked by prerequisite");
                         return getExperimentResult(context, experiment, -1, false, featureId, null, null, attributeOverrides);
                     }
                 }

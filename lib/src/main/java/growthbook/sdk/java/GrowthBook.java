@@ -3,6 +3,7 @@ package growthbook.sdk.java;
 import com.google.gson.JsonObject;
 import growthbook.sdk.java.stickyBucketing.InMemoryStickyBucketServiceImpl;
 import growthbook.sdk.java.stickyBucketing.StickyBucketService;
+import lombok.extern.slf4j.Slf4j;
 import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -12,6 +13,7 @@ import java.util.HashMap;
  * Build a context with {@link GBContext#builder()} or the {@link GBContext} constructor
  * and pass it as an argument to the class constructor.
  */
+@Slf4j
 public class GrowthBook implements IGrowthBook {
 
     private final GBContext context;
@@ -25,6 +27,7 @@ public class GrowthBook implements IGrowthBook {
 
     private ArrayList<ExperimentRunCallback> callbacks = new ArrayList<>();
     private JsonObject attributeOverrides = new JsonObject();
+    private JsonObject savedGroups = new JsonObject();
 
     /**
      * Initialize the GrowthBook SDK with a provided {@link GBContext}
@@ -38,6 +41,7 @@ public class GrowthBook implements IGrowthBook {
         this.conditionEvaluator = new ConditionEvaluator();
         this.experimentEvaluatorEvaluator = new ExperimentEvaluator();
         this.attributeOverrides = context.getAttributes();
+        this.savedGroups = context.getSavedGroups();
     }
 
     /**
@@ -52,6 +56,7 @@ public class GrowthBook implements IGrowthBook {
         this.conditionEvaluator = new ConditionEvaluator();
         this.experimentEvaluatorEvaluator = new ExperimentEvaluator();
         this.attributeOverrides = context.getAttributes();
+        this.savedGroups = context.getSavedGroups();
     }
 
     /**
@@ -81,6 +86,11 @@ public class GrowthBook implements IGrowthBook {
     }
 
     @Override
+    public void setSavedGroups(JsonObject savedGroups) {
+        this.context.setSavedGroups(savedGroups);
+    }
+
+    @Override
     public void setAttributes(String attributesJsonString) {
         this.context.setAttributesJson(attributesJsonString);
     }
@@ -89,9 +99,7 @@ public class GrowthBook implements IGrowthBook {
     public <ValueType> ExperimentResult<ValueType> run(Experiment<ValueType> experiment) {
         ExperimentResult<ValueType> result = experimentEvaluatorEvaluator.evaluateExperiment(experiment, this.context, null, attributeOverrides);
 
-        this.callbacks.forEach(callback -> {
-            callback.onRun(result);
-        });
+        this.callbacks.forEach(callback -> callback.onRun(result));
 
         return result;
     }
@@ -122,7 +130,7 @@ public class GrowthBook implements IGrowthBook {
             Boolean maybeValue = (Boolean) this.featureEvaluator.evaluateFeature(featureKey, context, Boolean.class, attributeOverrides).getValue();
             return maybeValue == null ? defaultValue : maybeValue;
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage(), e);
             return defaultValue;
         }
     }
@@ -133,7 +141,7 @@ public class GrowthBook implements IGrowthBook {
             String maybeValue = (String) this.featureEvaluator.evaluateFeature(featureKey, context, String.class, attributeOverrides).getValue();
             return maybeValue == null ? defaultValue : maybeValue;
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage(), e);
             return defaultValue;
         }
     }
@@ -142,19 +150,21 @@ public class GrowthBook implements IGrowthBook {
     public Float getFeatureValue(String featureKey, Float defaultValue) {
         try {
             // Type erasure occurs so a Double ends up being returned
-            Double maybeValue = (Double) this.featureEvaluator.evaluateFeature(featureKey, context, Double.class, attributeOverrides).getValue();
+            Object maybeValue = this.featureEvaluator.evaluateFeature(featureKey, context, Object.class, attributeOverrides).getValue();
 
             if (maybeValue == null) {
                 return defaultValue;
             }
 
-            try {
-                return maybeValue.floatValue();
-            } catch (NumberFormatException e) {
+            if (maybeValue instanceof Double) {
+                return ((Double) maybeValue).floatValue();
+            } else if (maybeValue instanceof Long) {
+                return ((Long) maybeValue).floatValue();
+            } else {
                 return defaultValue;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage(), e);
             return defaultValue;
         }
     }
@@ -176,7 +186,7 @@ public class GrowthBook implements IGrowthBook {
                 return defaultValue;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage(), e);
             return defaultValue;
         }
     }
@@ -187,7 +197,7 @@ public class GrowthBook implements IGrowthBook {
             Object maybeValue = this.featureEvaluator.evaluateFeature(featureKey, context, defaultValue.getClass(), attributeOverrides).getValue();
             return maybeValue == null ? defaultValue : maybeValue;
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage(), e);
             return defaultValue;
         }
     }
@@ -204,14 +214,22 @@ public class GrowthBook implements IGrowthBook {
 
             return jsonUtils.gson.fromJson(stringValue, gsonDeserializableClass);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage(), e);
             return defaultValue;
         }
     }
 
     @Override
     public Boolean evaluateCondition(String attributesJsonString, String conditionJsonString) {
-        return conditionEvaluator.evaluateCondition(attributesJsonString, conditionJsonString);
+        try {
+            JsonObject attributesJson = jsonUtils.gson.fromJson(attributesJsonString, JsonObject.class);
+            JsonObject conditionJson = jsonUtils.gson.fromJson(conditionJsonString, JsonObject.class);
+            JsonObject savedGroupsJson = jsonUtils.gson.fromJson(savedGroups, JsonObject.class);
+            return conditionEvaluator.evaluateCondition(attributesJson, conditionJson, savedGroupsJson);
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            return false;
+        }
     }
 
     @Override
@@ -231,7 +249,7 @@ public class GrowthBook implements IGrowthBook {
                 return defaultValue;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage(), e);
             return defaultValue;
         }
     }
@@ -249,6 +267,15 @@ public class GrowthBook implements IGrowthBook {
     @Override
     public void featuresAPIModelSuccessfully(String featuresDataModel) {
         refreshStickyBucketService(featuresDataModel);
+    }
+
+    // if feature enabled by environment it would be present in context
+    @Override
+    public Boolean isFeatureEnabled(String featureKey) {
+        if (context.getFeatures() != null) {
+            return context.getFeatures().keySet().contains(featureKey);
+        }
+        return false;
     }
 
     private void refreshStickyBucketService(@Nullable String featuresDataModel) {

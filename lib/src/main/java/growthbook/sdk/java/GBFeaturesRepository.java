@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import lombok.Builder;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.OkHttpClient;
@@ -29,6 +30,7 @@ import java.util.logging.Logger;
  * Get the features JSON with {@link GBFeaturesRepository#getFeaturesJson()}.
  * You would provide the features JSON when creating the {@link GBContext}
  */
+@Slf4j
 public class GBFeaturesRepository implements IGBFeaturesRepository {
 
     @Getter
@@ -64,6 +66,9 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
     private Request sseRequest = null;
     @Nullable
     private EventSource sseEventSource = null;
+    @Getter
+    @Nullable
+    private String savedGroupsJson = "{}";
 
     /**
      * Allows you to get the features JSON from the provided {@link GBFeaturesRepository#getFeaturesEndpoint()}.
@@ -75,7 +80,7 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
     /**
      * Create a new GBFeaturesRepository
      *
-     * @param apiHost       The GrowthBook API host (default: https://cdn.growthbook.io)
+     * @param apiHost       The GrowthBook API host (default: <a href="https://cdn.growthbook.io">...</a>)
      * @param clientKey     Your client ID, e.g. sdk-abc123
      * @param encryptionKey optional key for decrypting encrypted payload
      * @param swrTtlSeconds How often the cache should be invalidated when using {@link FeatureRefreshStrategy#STALE_WHILE_REVALIDATE} (default: 60)
@@ -94,7 +99,7 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
     /**
      * Create a new GBFeaturesRepository
      *
-     * @param apiHost       The GrowthBook API host (default: https://cdn.growthbook.io)
+     * @param apiHost       The GrowthBook API host (default: <a href="https://cdn.growthbook.io">...</a>)
      * @param clientKey     Your client ID, e.g. sdk-abc123
      * @param encryptionKey optional key for decrypting encrypted payload
      * @param swrTtlSeconds How often the cache should be invalidated when using {@link FeatureRefreshStrategy#STALE_WHILE_REVALIDATE} (default: 60)
@@ -181,11 +186,11 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
             }
 
             @Override
-            public void onResponse(@NotNull Call call, @NotNull Response response) throws IOException {
+            public void onResponse(@NotNull Call call, @NotNull Response response) {
                 try {
                     self.onSuccess(response);
                 } catch (FeatureFetchException e) {
-                    e.printStackTrace();
+                    log.error(e.getMessage(), e);
                 }
             }
         });
@@ -216,7 +221,7 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
 
     private void initializeSSE(Boolean retryOnFailure) {
         if (!this.sseAllowed) {
-            System.out.printf("\nFalling back to stale-while-revalidate refresh strategy. 'X-Sse-Support: enabled' not present on resource returned at %s", this.featuresEndpoint);
+            log.info("\nFalling back to stale-while-revalidate refresh strategy. 'X-Sse-Support: enabled' not present on resource returned at {}", this.featuresEndpoint);
             this.refreshStrategy = FeatureRefreshStrategy.STALE_WHILE_REVALIDATE;
         }
 
@@ -290,12 +295,11 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
         this.sseHttpClient.newCall(sseRequest).enqueue(new Callback() {
             @Override
             public void onFailure(@NotNull Call call, @NotNull IOException e) {
-                System.out.println("SSE connection failed");
-                e.printStackTrace();
+                log.error("SSE connection failed: {}", e.getMessage(), e);
             }
 
             @Override
-            public void onResponse(@NotNull Call call, @NotNull Response response) throws IOException {
+            public void onResponse(@NotNull Call call, @NotNull Response response) {
                 // We don't do anything with this response
             }
         });
@@ -305,12 +309,11 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
      * @return A new {@link OkHttpClient} with an interceptor {@link GBFeaturesRepositoryRequestInterceptor}
      */
     private OkHttpClient initializeHttpClient() {
-        OkHttpClient client = new OkHttpClient.Builder()
+
+        return new OkHttpClient.Builder()
                 .addInterceptor(new GBFeaturesRepositoryRequestInterceptor())
                 .retryOnConnectionFailure(true)
                 .build();
-
-        return client;
     }
 
     private void refreshExpiresAt() {
@@ -343,7 +346,7 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
 
             this.onSuccess(response);
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error(e.getMessage(), e);
 
             throw new FeatureFetchException(
                     FeatureFetchException.FeatureFetchErrorCode.UNKNOWN,
@@ -364,37 +367,69 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
 
             // Features will be refreshed as either an encrypted or un-encrypted JSON string
             String refreshedFeatures;
+            String refreshedSavedGroups = "";
 
             if (this.encryptionKey != null) {
                 // Use encrypted features at responseBody.encryptedFeatures
                 JsonElement encryptedFeaturesJsonElement = jsonObject.get("encryptedFeatures");
+                JsonElement encryptedSavedGroupsJsonElement = jsonObject.get("encryptedSavedGroups");
                 if (encryptedFeaturesJsonElement == null) {
+                    log.error(
+                            "FeatureFetchException: CONFIGURATION_ERROR feature fetch error code: "
+                                    + "encryptionKey provided but endpoint not encrypted");
                     throw new FeatureFetchException(
                             FeatureFetchException.FeatureFetchErrorCode.CONFIGURATION_ERROR,
                             "encryptionKey provided but endpoint not encrypted"
                     );
                 }
+                if (encryptedSavedGroupsJsonElement == null) {
+                    log.error(
+                            "FeatureFetchException: CONFIGURATION_ERROR encryptedSavedGroupsJsonElement fetch error code: "
+                                    + "encryptionKey provided but endpoint not encrypted");
+                }
 
                 String encryptedFeaturesJson = encryptedFeaturesJsonElement.getAsString();
+                String encryptedSavedGroupsJson = null;
+                if (encryptedSavedGroupsJsonElement != null) {
+                    encryptedSavedGroupsJson = encryptedSavedGroupsJsonElement.getAsString();
+                    refreshedSavedGroups = DecryptionUtils.decrypt(encryptedSavedGroupsJson, this.encryptionKey).trim();
+                }
+
                 refreshedFeatures = DecryptionUtils.decrypt(encryptedFeaturesJson, this.encryptionKey).trim();
             } else {
                 // Use unencrypted features at responseBody.features
                 JsonElement featuresJsonElement = jsonObject.get("features");
+                JsonElement savedGroupsJsonElement = jsonObject.get("savedGroups");
+
                 if (featuresJsonElement == null) {
+                    log.error(
+                            "FeatureFetchException: CONFIGURATION_ERROR feature fetch error code: "
+                                    + "No features found");
+
                     throw new FeatureFetchException(
                             FeatureFetchException.FeatureFetchErrorCode.CONFIGURATION_ERROR,
                             "No features found"
                     );
                 }
 
+                if (savedGroupsJsonElement == null) {
+                    log.error(
+                            "FeatureFetchException: CONFIGURATION_ERROR savedGroupsJsonElement fetch error code: "
+                                    + "No features found");
+
+                }
+
                 refreshedFeatures = featuresJsonElement.toString().trim();
+                refreshedSavedGroups = savedGroupsJsonElement != null ? savedGroupsJsonElement.toString().trim() : null;
             }
 
             this.featuresJson = refreshedFeatures;
+            this.savedGroupsJson = refreshedSavedGroups;
 
             this.onRefreshSuccess(this.featuresJson);
         } catch (DecryptionUtils.DecryptionException e) {
-            e.printStackTrace();
+            log.error("FeatureFetchException: UNKNOWN feature fetch error code {}",
+                    e.getMessage(), e);
 
             throw new FeatureFetchException(
                     FeatureFetchException.FeatureFetchErrorCode.UNKNOWN,
@@ -404,15 +439,11 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
     }
 
     private void onRefreshSuccess(String featuresJson) {
-        this.refreshCallbacks.forEach(featureRefreshCallback -> {
-            featureRefreshCallback.onRefresh(featuresJson);
-        });
+        this.refreshCallbacks.forEach(featureRefreshCallback -> featureRefreshCallback.onRefresh(featuresJson));
     }
 
     private void onRefreshFailed(Throwable throwable) {
-        this.refreshCallbacks.forEach(featureRefreshCallback -> {
-            featureRefreshCallback.onError(throwable);
-        });
+        this.refreshCallbacks.forEach(featureRefreshCallback -> featureRefreshCallback.onError(throwable));
     }
 
     /**
@@ -424,6 +455,7 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
         try {
             ResponseBody responseBody = response.body();
             if (responseBody == null) {
+                log.error("FeatureFetchException: FeatureFetchErrorCode.NO_RESPONSE_ERROR");
                 throw new FeatureFetchException(
                         FeatureFetchException.FeatureFetchErrorCode.NO_RESPONSE_ERROR
                 );
@@ -431,7 +463,8 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
 
             onResponseJson(responseBody.string());
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error("FeatureFetchException: UNKNOWN feature fetch error code {}",
+                    e.getMessage(), e);
 
             throw new FeatureFetchException(
                     FeatureFetchException.FeatureFetchErrorCode.UNKNOWN,
@@ -463,12 +496,12 @@ public class GBFeaturesRepository implements IGBFeaturesRepository {
         public void onEvent(@NotNull EventSource eventSource, @Nullable String id, @Nullable String type, @NotNull String data) {
             super.onEvent(eventSource, id, type, data);
 
-            if (data.trim().equals("")) return;
+            if (data.trim().isEmpty()) return;
 
             try {
                 handler.onFeaturesResponse(data);
             } catch (FeatureFetchException e) {
-                e.printStackTrace();
+                log.error(e.getMessage(), e);
             }
         }
 
